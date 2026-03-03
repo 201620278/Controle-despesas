@@ -65,21 +65,13 @@
         const db = getFirestore(app);
         const expensesCollection = collection(db, "despesas");
 
-        // ===== LÓGICA DA APLICAÇÃO =====
-        // Elementos DOM
-        const form = document.getElementById('expense-form');
-        const descriptionInput = document.getElementById('description');
-        const amountInput = document.getElementById('amount');
-        const locationInput = document.getElementById('location');
-        const expenseDateInput = document.getElementById('expense-date');
-        const filterDateInput = document.getElementById('filter-date');
-        const clearFilterBtn = document.getElementById('clear-filter');
-        const expensesContainer = document.getElementById('expenses-container');
-        const dailyTotalSpan = document.getElementById('daily-total');
-        const overallTotalSpan = document.getElementById('overall-total');
-
         // Estado local (cache para cálculos)
         let expenses = [];
+
+        // Referências DOM (preenchidas quando o DOM estiver pronto)
+        let form, descriptionInput, amountInput, locationInput, expenseDateInput;
+        let filterDateStartInput, filterDateEndInput, clearFilterBtn, periodLabelSpan;
+        let expensesContainer, dailyTotalSpan, overallTotalSpan;
 
         // Utilitários
         function formatDateToYYYYMMDD(date) {
@@ -95,9 +87,8 @@
         }
 
         function setDefaultDates() {
-            const today = getTodayDate();
-            expenseDateInput.value = today;
-            filterDateInput.value = today;
+            if (!expenseDateInput) return;
+            expenseDateInput.value = getTodayDate();
         }
 
         function escapeHtml(unsafe) {
@@ -119,14 +110,19 @@
             return `${day}/${month}/${year}`;
         }
 
-        // Renderizar lista baseada no filtro
+        // Renderizar lista baseada no filtro de período
         function renderExpenses() {
-            const filterDate = filterDateInput.value;
+            if (!filterDateStartInput || !filterDateEndInput) return;
+            const dateStart = filterDateStartInput.value;
+            const dateEnd = filterDateEndInput.value;
             let filteredExpenses = expenses;
-            if (filterDate) {
-                filteredExpenses = expenses.filter(exp => exp.date === filterDate);
+            if (dateStart && dateEnd) {
+                filteredExpenses = expenses.filter(exp => {
+                    return exp.date >= dateStart && exp.date <= dateEnd;
+                });
             }
 
+            if (!expensesContainer) return;
             if (filteredExpenses.length === 0) {
                 expensesContainer.innerHTML = `<div class="empty-message">Nenhuma despesa encontrada.</div>`;
             } else {
@@ -148,22 +144,25 @@
             }
 
             // Atualizar totais
-            updateTotals(filterDate);
+            updateTotals(dateStart, dateEnd);
         }
 
-        function updateTotals(filterDate) {
+        function updateTotals(dateStart, dateEnd) {
+            if (!overallTotalSpan || !dailyTotalSpan || !periodLabelSpan) return;
             const overallTotal = expenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
             overallTotalSpan.innerText = `R$ ${formatNumber(overallTotal)}`;
 
-            let dailyTotal = 0;
-            if (filterDate) {
-                dailyTotal = expenses
-                    .filter(exp => exp.date === filterDate)
+            let periodTotal = 0;
+            if (dateStart && dateEnd) {
+                periodLabelSpan.textContent = 'Total do período';
+                periodTotal = expenses
+                    .filter(exp => exp.date >= dateStart && exp.date <= dateEnd)
                     .reduce((sum, exp) => sum + Number(exp.amount), 0);
             } else {
-                dailyTotal = overallTotal;
+                periodLabelSpan.textContent = 'Total do período';
+                periodTotal = overallTotal;
             }
-            dailyTotalSpan.innerText = `R$ ${formatNumber(dailyTotal)}`;
+            dailyTotalSpan.innerText = `R$ ${formatNumber(periodTotal)}`;
         }
 
         // ===== OPERAÇÕES FIREBASE =====
@@ -211,50 +210,72 @@
             alert("Falha ao carregar dados do Firebase.");
         });
 
-        // ===== EVENTOS =====
-        form.addEventListener('submit', (e) => {
-            e.preventDefault();
+        // ===== INICIALIZAÇÃO (aguardar DOM) =====
+        function init() {
+            form = document.getElementById('expense-form');
+            descriptionInput = document.getElementById('description');
+            amountInput = document.getElementById('amount');
+            locationInput = document.getElementById('location');
+            expenseDateInput = document.getElementById('expense-date');
+            filterDateStartInput = document.getElementById('filter-date-start');
+            filterDateEndInput = document.getElementById('filter-date-end');
+            clearFilterBtn = document.getElementById('clear-filter');
+            periodLabelSpan = document.getElementById('period-label');
+            expensesContainer = document.getElementById('expenses-container');
+            dailyTotalSpan = document.getElementById('daily-total');
+            overallTotalSpan = document.getElementById('overall-total');
 
-            const description = descriptionInput.value.trim();
-            const amount = amountInput.value.trim();
-            const location = locationInput.value.trim();
-            const date = expenseDateInput.value;
+            if (!form || !expensesContainer) return;
 
-            if (!description || !amount || !location || !date) {
-                alert('Preencha todos os campos obrigatórios.');
-                return;
-            }
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
 
-            if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-                alert('Informe um valor válido (maior que zero).');
-                return;
-            }
+                const description = descriptionInput.value.trim();
+                const amount = amountInput.value.trim();
+                const location = locationInput.value.trim();
+                const date = expenseDateInput.value;
 
-            addExpense(description, amount, location, date);
+                if (!description || !amount || !location || !date) {
+                    alert('Preencha todos os campos obrigatórios.');
+                    return;
+                }
 
-            // Limpar campos (exceto data, que volta para hoje)
-            descriptionInput.value = '';
-            amountInput.value = '';
-            locationInput.value = '';
-            expenseDateInput.value = getTodayDate();
-        });
+                if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+                    alert('Informe um valor válido (maior que zero).');
+                    return;
+                }
 
-        filterDateInput.addEventListener('change', () => {
-            renderExpenses(); // re-renderiza com filtro
-        });
+                addExpense(description, amount, location, date);
 
-        clearFilterBtn.addEventListener('click', () => {
-            filterDateInput.value = '';
+                descriptionInput.value = '';
+                amountInput.value = '';
+                locationInput.value = '';
+                expenseDateInput.value = getTodayDate();
+            });
+
+            filterDateStartInput.addEventListener('change', () => { renderExpenses(); });
+            filterDateEndInput.addEventListener('change', () => { renderExpenses(); });
+
+            clearFilterBtn.addEventListener('click', () => {
+                filterDateStartInput.value = '';
+                filterDateEndInput.value = '';
+                renderExpenses();
+            });
+
+            setDefaultDates();
             renderExpenses();
-        });
+        }
 
-        // Inicializar campos de data
-        setDefaultDates();
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
     </script>
 </head>
 <body>
     <div class="container">
-        <h1>📋 Controle de Despesas com Firebase</h1>
+        <h1>📋 CONTROLE DE DESPESAS</h1>
 
         <!-- Formulário -->
         <div class="form-card">
@@ -283,11 +304,15 @@
             </form>
         </div>
 
-        <!-- Filtro -->
+        <!-- Filtro por período -->
         <div class="filter-section">
             <div class="filter-date">
-                <label for="filter-date" style="display: block; margin-bottom: 6px; font-weight: 500;">📅 Filtrar por data</label>
-                <input type="date" id="filter-date" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1;">
+                <label for="filter-date-start" style="display: block; margin-bottom: 6px; font-weight: 500;">📅 Data inicial</label>
+                <input type="date" id="filter-date-start" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1;">
+            </div>
+            <div class="filter-date">
+                <label for="filter-date-end" style="display: block; margin-bottom: 6px; font-weight: 500;">📅 Data final</label>
+                <input type="date" id="filter-date-end" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1;">
             </div>
             <button id="clear-filter" class="btn btn-secondary">Mostrar todas</button>
         </div>
@@ -295,7 +320,7 @@
         <!-- Totais -->
         <div class="totals">
             <div class="total-box">
-                <span>Total do dia</span>
+                <span id="period-label">Total do período</span>
                 <div class="value" id="daily-total">R$ 0,00</div>
             </div>
             <div class="total-box">
