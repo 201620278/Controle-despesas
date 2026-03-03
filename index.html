@@ -37,6 +37,12 @@
         .delete-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.2rem; padding: 5px; border-radius: 6px; transition: all 0.2s; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
         .delete-btn:hover { background: #fee2e2; color: #b91c1c; }
         .empty-message { text-align: center; padding: 40px 20px; color: #94a3b8; font-style: italic; }
+        .month-group { border-top: 1px solid #e2e8f0; }
+        .month-group summary { list-style: none; }
+        .month-summary { padding: 12px 20px; background: #eef2ff; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: #1e293b; }
+        .month-summary span { display: inline-block; }
+        .month-summary .month-total { font-size: 0.95rem; color: #475569; }
+        .month-group[open] .month-summary { border-bottom: 1px solid #e2e8f0; background: #e0e7ff; }
         @media (max-width: 700px) {
             .list-header, .expense-item { grid-template-columns: 1fr; gap: 8px; padding: 15px; }
             .list-header { display: none; }
@@ -206,6 +212,24 @@
             return `${day}/${month}/${year}`;
         }
 
+        function getMonthKey(dateStr) {
+            if (!dateStr) return '';
+            const [year, month] = dateStr.split('-');
+            return `${year}-${month}`;
+        }
+
+        function formatMonthLabel(monthKey) {
+            if (!monthKey) return '';
+            const [year, month] = monthKey.split('-');
+            const monthIndex = parseInt(month, 10) - 1;
+            const monthNames = [
+                'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+                'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+            ];
+            const monthName = monthNames[monthIndex] || month;
+            return `${monthName} / ${year}`;
+        }
+
         // Renderizar lista baseada no filtro de período
         function renderExpenses() {
             if (!filterDateStartInput || !filterDateEndInput) return;
@@ -223,9 +247,33 @@
                 expensesContainer.innerHTML = `<div class="empty-message">Nenhuma despesa encontrada.</div>`;
             } else {
                 // Ordenar por data decrescente e depois por id (padrão Firestore timestamp)
-                const sorted = [...filteredExpenses].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
-                let html = '';
-                sorted.forEach(exp => {
+            const sorted = [...filteredExpenses].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+
+            // Agrupar por mês/ano
+            const groups = {};
+            sorted.forEach(exp => {
+                const key = getMonthKey(exp.date);
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(exp);
+            });
+
+            const monthKeys = Object.keys(groups).sort((a, b) => b.localeCompare(a)); // mês mais recente primeiro
+
+            let html = '';
+            monthKeys.forEach((monthKey, index) => {
+                const monthExpenses = groups[monthKey];
+                const monthLabel = formatMonthLabel(monthKey);
+                const monthTotal = monthExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
+
+                html += `
+                    <details class="month-group" ${index === 0 ? 'open' : ''}>
+                        <summary class="month-summary">
+                            <span>${monthLabel}</span>
+                            <span class="month-total">Total do mês: R$ ${formatNumber(monthTotal)}</span>
+                        </summary>
+                `;
+
+                monthExpenses.forEach(exp => {
                     html += `
                         <div class="expense-item" data-id="${exp.id}">
                             <div class="expense-description">${escapeHtml(exp.description)}</div>
@@ -236,7 +284,13 @@
                         </div>
                     `;
                 });
-                expensesContainer.innerHTML = html;
+
+                html += `
+                    </details>
+                `;
+            });
+
+            expensesContainer.innerHTML = html;
             }
 
             // Atualizar totais
