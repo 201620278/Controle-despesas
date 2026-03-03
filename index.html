@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Controle de Despesas com Firebase</title>
+    <meta name="theme-color" content="#3498db">
+    <link rel="manifest" href="manifest.json">
     <style>
         /* (mesmo estilo anterior, mantido por brevidade) */
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -105,7 +107,8 @@
     <script type="module">
         // Importações do Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, setDoc } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-messaging.js";
 
         // Configuração fornecida (substitua se necessário)
         const firebaseConfig = {
@@ -130,12 +133,18 @@
         let filterDateStartInput, filterDateEndInput, clearFilterBtn, periodLabelSpan;
         let expensesContainer, dailyTotalSpan, overallTotalSpan;
         let toastContainer;
+        let enableNotificationsBtn, notificationsStatusSpan;
 
         // Identificação do dispositivo (para não alertar o próprio lançamento)
         const CLIENT_ID_STORAGE_KEY = 'cd_client_id';
         const clientId = getOrCreateClientId();
         let hasSeenInitialSnapshot = false;
         let pendingNotifications = [];
+        const PUSH_CLIENTS_COLLECTION = 'pushClients';
+
+        // FCM Web Push VAPID key (Firebase Console → Cloud Messaging → Web configuration)
+        // Troque pelo seu valor real.
+        const FCM_VAPID_KEY = 'COLOQUE_SUA_VAPID_KEY_AQUI';
 
         function getOrCreateClientId() {
             try {
@@ -356,6 +365,74 @@
             }
         }
 
+        async function enablePushNotifications() {
+            if (!enableNotificationsBtn || !notificationsStatusSpan) return;
+
+            if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+                notificationsStatusSpan.textContent = 'Não suportado neste navegador.';
+                showToast('Notificações', 'Seu navegador não suporta notificações push.');
+                return;
+            }
+
+            const supported = await isSupported().catch(() => false);
+            if (!supported) {
+                notificationsStatusSpan.textContent = 'Não suportado neste dispositivo.';
+                showToast('Notificações', 'Notificações push não são suportadas aqui.');
+                return;
+            }
+
+            // Permissão precisa de ação do usuário (clique).
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') {
+                notificationsStatusSpan.textContent = 'Permissão negada.';
+                showToast('Notificações', 'Permissão de notificação não foi concedida.');
+                return;
+            }
+
+            notificationsStatusSpan.textContent = 'Ativando...';
+            enableNotificationsBtn.disabled = true;
+
+            try {
+                const swReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+                const messaging = getMessaging(app);
+
+                const token = await getToken(messaging, {
+                    vapidKey: FCM_VAPID_KEY,
+                    serviceWorkerRegistration: swReg
+                });
+
+                if (!token) {
+                    notificationsStatusSpan.textContent = 'Falha ao gerar token.';
+                    showToast('Notificações', 'Não foi possível ativar as notificações (token vazio).');
+                    return;
+                }
+
+                await setDoc(doc(db, PUSH_CLIENTS_COLLECTION, clientId), {
+                    clientId,
+                    token,
+                    updatedAt: new Date().toISOString(),
+                    userAgent: navigator.userAgent
+                }, { merge: true });
+
+                notificationsStatusSpan.textContent = 'Ativadas.';
+                showToast('Notificações', 'Pronto! Você receberá notificações de novos lançamentos.');
+
+                // Mensagens com app aberto (opcional)
+                onMessage(messaging, (payload) => {
+                    const title = payload?.notification?.title || 'Novo lançamento';
+                    const body = payload?.notification?.body || 'Um novo lançamento foi adicionado.';
+                    showToast(title, body);
+                    try { navigator.vibrate?.(120); } catch { /* ignore */ }
+                });
+            } catch (err) {
+                console.error('Erro ao ativar push:', err);
+                notificationsStatusSpan.textContent = 'Erro ao ativar.';
+                showToast('Notificações', 'Erro ao ativar notificações. Verifique HTTPS e a VAPID key.');
+            } finally {
+                enableNotificationsBtn.disabled = false;
+            }
+        }
+
         // ===== INICIALIZAÇÃO (aguardar DOM) =====
         function init() {
             form = document.getElementById('expense-form');
@@ -371,6 +448,8 @@
             dailyTotalSpan = document.getElementById('daily-total');
             overallTotalSpan = document.getElementById('overall-total');
             toastContainer = document.getElementById('toast-container');
+            enableNotificationsBtn = document.getElementById('enable-notifications');
+            notificationsStatusSpan = document.getElementById('notifications-status');
 
             if (!form || !expensesContainer) return;
 
@@ -417,6 +496,12 @@
                 pendingNotifications.forEach((n) => showToast(n.title, n.message));
                 pendingNotifications = [];
             }
+
+            if (enableNotificationsBtn) {
+                enableNotificationsBtn.addEventListener('click', () => {
+                    enablePushNotifications();
+                });
+            }
         }
 
         if (document.readyState === 'loading') {
@@ -430,6 +515,19 @@
     <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
     <div class="container">
         <h1>📋 CONTROLE DE DESPESAS</h1>
+
+        <div class="filter-section" style="margin-bottom: 20px;">
+            <div style="flex: 1 1 320px;">
+                <div style="font-weight: 600; color: #334155; margin-bottom: 6px;">🔔 Notificações</div>
+                <div style="color:#64748b; font-size: 0.92rem; line-height: 1.25rem;">
+                    Ative para receber notificação do celular quando alguém fizer um lançamento.
+                </div>
+                <div style="margin-top: 6px; color:#64748b; font-size: 0.88rem;">
+                    Status: <span id="notifications-status">Desativadas</span>
+                </div>
+            </div>
+            <button id="enable-notifications" class="btn" type="button">Ativar notificações</button>
+        </div>
 
         <!-- Formulário -->
         <div class="form-card">
