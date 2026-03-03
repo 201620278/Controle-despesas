@@ -43,6 +43,63 @@
             .expense-item { border-bottom: 2px solid #e2e8f0; position: relative; }
             .delete-btn { position: absolute; top: 10px; right: 10px; }
         }
+
+        /* Toast (alerta) para celular */
+        #toast-container {
+            position: fixed;
+            left: 50%;
+            bottom: 16px;
+            transform: translateX(-50%);
+            width: min(680px, calc(100vw - 24px));
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 9999;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        .toast {
+            background: rgba(15, 23, 42, 0.92);
+            color: #fff;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 14px;
+            padding: 12px 14px;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.25);
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            animation: toast-in 160ms ease-out;
+        }
+        .toast-title {
+            font-weight: 700;
+            font-size: 0.95rem;
+            margin-bottom: 2px;
+        }
+        .toast-message {
+            font-size: 0.92rem;
+            color: rgba(226, 232, 240, 0.95);
+            line-height: 1.25rem;
+            word-break: break-word;
+        }
+        .toast-close {
+            background: transparent;
+            border: none;
+            color: rgba(226, 232, 240, 0.9);
+            cursor: pointer;
+            font-size: 1.1rem;
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .toast-close:hover { background: rgba(148, 163, 184, 0.18); }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
     <!-- Importação do Firebase (versão 12.9.0) -->
     <script type="module">
@@ -72,6 +129,28 @@
         let form, descriptionInput, amountInput, locationInput, expenseDateInput;
         let filterDateStartInput, filterDateEndInput, clearFilterBtn, periodLabelSpan;
         let expensesContainer, dailyTotalSpan, overallTotalSpan;
+        let toastContainer;
+
+        // Identificação do dispositivo (para não alertar o próprio lançamento)
+        const CLIENT_ID_STORAGE_KEY = 'cd_client_id';
+        const clientId = getOrCreateClientId();
+        let hasSeenInitialSnapshot = false;
+        let pendingNotifications = [];
+
+        function getOrCreateClientId() {
+            try {
+                const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+                if (existing) return existing;
+                const newId = (globalThis.crypto && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                localStorage.setItem(CLIENT_ID_STORAGE_KEY, newId);
+                return newId;
+            } catch {
+                // Se localStorage falhar, ainda gera um id para a sessão
+                return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            }
+        }
 
         // Utilitários
         function formatDateToYYYYMMDD(date) {
@@ -174,7 +253,8 @@
                     amount: parseFloat(amount),
                     location: location.trim(),
                     date: date,
-                    createdAt: new Date().toISOString() // opcional
+                    createdAt: new Date().toISOString(), // opcional
+                    createdBy: clientId
                 });
                 // Não precisamos atualizar localmente, o snapshot fará
             } catch (error) {
@@ -205,10 +285,76 @@
                 ...doc.data()
             }));
             renderExpenses();
+
+            // Alertar somente após o primeiro carregamento
+            if (!hasSeenInitialSnapshot) {
+                hasSeenInitialSnapshot = true;
+                return;
+            }
+
+            const changes = snapshot.docChanges();
+            changes.forEach((change) => {
+                if (change.type !== 'added') return;
+                const data = change.doc.data();
+                // Ignora se foi este próprio dispositivo que adicionou
+                if (data?.createdBy && data.createdBy === clientId) return;
+                notifyNewExpense({
+                    description: data?.description ?? '',
+                    amount: data?.amount ?? 0,
+                    location: data?.location ?? '',
+                    date: data?.date ?? ''
+                });
+            });
         }, (error) => {
             console.error("Erro no snapshot: ", error);
             alert("Falha ao carregar dados do Firebase.");
         });
+
+        function notifyNewExpense(exp) {
+            const title = 'Novo lançamento';
+            const parts = [];
+            if (exp.description) parts.push(exp.description);
+            if (exp.amount !== undefined && exp.amount !== null && exp.amount !== '') parts.push(`R$ ${formatNumber(exp.amount)}`);
+            if (exp.location) parts.push(exp.location);
+            if (exp.date) parts.push(formatDateDisplay(exp.date));
+            const message = parts.join(' • ') || 'Um novo lançamento foi adicionado.';
+
+            if (!toastContainer) {
+                pendingNotifications.push({ title, message });
+                return;
+            }
+            showToast(title, message);
+
+            // Vibração leve (bom no celular; ignora se não suportar)
+            try { navigator.vibrate?.(120); } catch { /* ignore */ }
+        }
+
+        function showToast(title, message) {
+            if (!toastContainer) return;
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `
+                <div>
+                    <div class="toast-title">${escapeHtml(String(title))}</div>
+                    <div class="toast-message">${escapeHtml(String(message))}</div>
+                </div>
+                <button class="toast-close" type="button" aria-label="Fechar">✕</button>
+            `;
+            const closeBtn = toast.querySelector('.toast-close');
+            closeBtn?.addEventListener('click', () => toast.remove());
+            toastContainer.prepend(toast);
+
+            // Remove automaticamente após alguns segundos
+            window.setTimeout(() => {
+                if (toast.isConnected) toast.remove();
+            }, 6500);
+
+            // Limitar quantidade de toasts na tela
+            const maxToasts = 3;
+            while (toastContainer.children.length > maxToasts) {
+                toastContainer.lastElementChild?.remove();
+            }
+        }
 
         // ===== INICIALIZAÇÃO (aguardar DOM) =====
         function init() {
@@ -224,6 +370,7 @@
             expensesContainer = document.getElementById('expenses-container');
             dailyTotalSpan = document.getElementById('daily-total');
             overallTotalSpan = document.getElementById('overall-total');
+            toastContainer = document.getElementById('toast-container');
 
             if (!form || !expensesContainer) return;
 
@@ -264,6 +411,12 @@
 
             setDefaultDates();
             renderExpenses();
+
+            // Exibir notificações que chegaram antes do UI estar pronto
+            if (toastContainer && pendingNotifications.length) {
+                pendingNotifications.forEach((n) => showToast(n.title, n.message));
+                pendingNotifications = [];
+            }
         }
 
         if (document.readyState === 'loading') {
@@ -274,6 +427,7 @@
     </script>
 </head>
 <body>
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
     <div class="container">
         <h1>📋 CONTROLE DE DESPESAS</h1>
 
