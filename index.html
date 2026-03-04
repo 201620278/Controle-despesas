@@ -299,20 +299,24 @@
 
         function updateTotals(dateStart, dateEnd) {
             if (!overallTotalSpan || !dailyTotalSpan || !periodLabelSpan) return;
-            const overallTotal = expenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
-            overallTotalSpan.innerText = `R$ ${formatNumber(overallTotal)}`;
 
-            let periodTotal = 0;
-            if (dateStart && dateEnd) {
-                periodLabelSpan.textContent = 'Total do período';
-                periodTotal = expenses
-                    .filter(exp => exp.date >= dateStart && exp.date <= dateEnd)
-                    .reduce((sum, exp) => sum + Number(exp.amount), 0);
-            } else {
-                periodLabelSpan.textContent = 'Total do período';
-                periodTotal = overallTotal;
-            }
-            dailyTotalSpan.innerText = `R$ ${formatNumber(periodTotal)}`;
+            const today = getTodayDate();
+            const currentMonthKey = getMonthKey(today);
+            const currentYear = today.split('-')[0];
+
+            // Total anual (todas as despesas do ano atual)
+            const yearlyTotal = expenses
+                .filter(exp => typeof exp.date === 'string' && exp.date.startsWith(currentYear + '-'))
+                .reduce((sum, exp) => sum + Number(exp.amount), 0);
+            overallTotalSpan.innerText = `R$ ${formatNumber(yearlyTotal)}`;
+
+            // Total do mês atual
+            const monthTotal = expenses
+                .filter(exp => getMonthKey(exp.date) === currentMonthKey)
+                .reduce((sum, exp) => sum + Number(exp.amount), 0);
+
+            periodLabelSpan.textContent = formatMonthLabel(currentMonthKey) || 'Mês atual';
+            dailyTotalSpan.innerText = `R$ ${formatNumber(monthTotal)}`;
         }
 
         // ===== OPERAÇÕES FIREBASE =====
@@ -585,11 +589,11 @@
         <!-- Totais -->
         <div class="totals">
             <div class="total-box">
-                <span id="period-label">Total do período</span>
+                <span id="period-label">Mês atual</span>
                 <div class="value" id="daily-total">R$ 0,00</div>
             </div>
             <div class="total-box">
-                <span>Total geral</span>
+                <span>Total anual</span>
                 <div class="value" id="overall-total">R$ 0,00</div>
             </div>
         </div>
